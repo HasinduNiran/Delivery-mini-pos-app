@@ -18,14 +18,17 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://10.160.207.223:4000",
+        "EXPO_PUBLIC_API_URL": "https://flowiix-pos-server.onrender.com",
         "EXPO_PUBLIC_API_KEY": "f315e862b297f7578e0340f1542adc1d684ab470cc5a65c00ae421954ed3e3a1"
       }
     },
     "production": {
       "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "EXPO_PUBLIC_API_URL": "http://10.160.207.223:4000",
+        "EXPO_PUBLIC_API_URL": "https://flowiix-pos-server.onrender.com",
         "EXPO_PUBLIC_API_KEY": "f315e862b297f7578e0340f1542adc1d684ab470cc5a65c00ae421954ed3e3a1"
       }
     }
