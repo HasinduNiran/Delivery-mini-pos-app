@@ -28,10 +28,12 @@ export type BillFilters = {
   to?: string; // ISO date-time
 };
 
+// Skips undefined values only: an empty string is meaningful (e.g.
+// customer='' selects credit bills saved without a name).
 function toQuery(params: Record<string, string | number | undefined>) {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== '') q.set(k, String(v));
+    if (v !== undefined) q.set(k, String(v));
   }
   const qs = q.toString();
   return qs ? `?${qs}` : '';
