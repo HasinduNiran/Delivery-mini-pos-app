@@ -1,6 +1,6 @@
 import { FlashList } from '@shopify/flash-list';
-import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ItemCard } from '@/components/ItemCard';
 import { SearchBar } from '@/components/ui';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 import type { Product } from '@/store/cartStore';
 import {
   selectTotalAmount,
@@ -35,10 +36,15 @@ export default function BillingScreen() {
   const totalAmount = useCartStore(selectTotalAmount);
 
   // Fetch the catalog from the backend on mount (cache shows instantly).
-  useEffect(() => {
-    loadProducts();
-  }, [loadProducts]);
+  // Reload the catalog every time this tab is opened (prices / stock may
+  // have been changed on the Items tab or on another device).
+  useFocusEffect(
+    useCallback(() => {
+      loadProducts();
+    }, [loadProducts]),
+  );
 
+  const keyboard = useKeyboardHeight();
   const [search, setSearch] = useState('');
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -166,10 +172,12 @@ export default function BillingScreen() {
         visible={selected !== null}
         transparent
         animationType="fade"
+        statusBarTranslucent
         onRequestClose={closeQtyPrompt}>
         <Pressable
           onPress={closeQtyPrompt}
-          className="flex-1 items-center justify-center bg-black/40 px-6">
+          className="flex-1 items-center justify-center bg-black/40 px-6"
+          style={{ paddingBottom: keyboard }}>
           {/* Stop taps inside the card from closing the modal. */}
           <Pressable
             onPress={() => {}}

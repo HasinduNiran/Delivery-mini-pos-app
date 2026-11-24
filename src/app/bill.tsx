@@ -15,6 +15,7 @@ import type { DisplayBill } from '@/api/types';
 import { listCustomerNames } from '@/api/bills';
 import { ApiError } from '@/api/client';
 import { PaperSizeToggle } from '@/components/PaperSizeToggle';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 import { useDebounced } from '@/hooks/usePagedList';
 import { printReceipt, shareReceiptPdf } from '@/lib/print';
 import { SHOP } from '@/lib/receipt';
@@ -24,6 +25,7 @@ import { formatMoney } from '@/utils/format';
 
 export default function BillScreen() {
   const insets = useSafeAreaInsets();
+  const keyboard = useKeyboardHeight();
   const items = useCartStore((s) => s.items);
   const total = useCartStore(selectTotalAmount);
   const clearCart = useCartStore((s) => s.clearCart);
@@ -224,7 +226,9 @@ export default function BillScreen() {
   // ---- Cart / checkout ---------------------------------------------------
   return (
     <View className="flex-1 bg-slate-100">
-      <ScrollView contentContainerStyle={{ padding: 16 }}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ padding: 16, paddingBottom: 16 + keyboard }}>
         <View className="items-center pb-4">
           <Text className="text-lg font-bold text-slate-900">{SHOP.name}</Text>
           <Text className="text-xs text-slate-500">Sales Bill</Text>

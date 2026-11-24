@@ -65,7 +65,7 @@ export function ItemFormSheet({
     try {
       await onSave({
         name: name.trim(),
-        emoji: emoji.trim() || undefined,
+        emoji: emoji.trim(), // empty -> server default 🛒
         costPrice: costNum,
         price: priceNum,
         stock: finalStock,
@@ -117,7 +117,7 @@ export function ItemFormSheet({
               onChangeText={setEmoji}
               placeholder="🛒"
               placeholderTextColor="#94a3b8"
-              maxLength={2}
+              maxLength={8}
               className={`${inputCls} text-center`}
             />
           </View>

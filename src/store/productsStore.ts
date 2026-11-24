@@ -8,7 +8,7 @@ import {
   type ProductInput,
   updateProduct,
 } from '@/api/products';
-import type { Product } from '@/store/cartStore';
+import { type Product, useCartStore } from '@/store/cartStore';
 import {
   pendingDeductions,
   useOfflineBillsStore,
@@ -56,6 +56,7 @@ export const useProductsStore = create<ProductsState>()(
         try {
           const products = await fetchAllProducts();
           set({ products, loading: false });
+          useCartStore.getState().syncProducts(products);
           // Offset authoritative server stock by sales that haven't synced
           // yet, so offline sales stay reflected after a refresh.
           const queue = useOfflineBillsStore.getState().queue;
@@ -81,6 +82,7 @@ export const useProductsStore = create<ProductsState>()(
         set((state) => ({
           products: state.products.map((p) => (p.id === id ? updated : p)),
         }));
+        useCartStore.getState().syncProducts([updated]);
       },
 
       removeProduct: async (id) => {

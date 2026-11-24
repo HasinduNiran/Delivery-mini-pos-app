@@ -20,6 +20,8 @@ type CartState = {
   removeItem: (id: string) => void;
   updateQty: (id: string, qty: number) => void;
   clearCart: () => void;
+  // Refresh cart lines with the latest product data (price, name, stock).
+  syncProducts: (products: Product[]) => void;
 };
 
 export const useCartStore = create<CartState>((set) => ({
@@ -55,6 +57,19 @@ export const useCartStore = create<CartState>((set) => ({
     }),
 
   clearCart: () => set({ items: {} }),
+
+  syncProducts: (products) =>
+    set((state) => {
+      const ids = Object.keys(state.items);
+      if (ids.length === 0) return state;
+      const byId = new Map(products.map((p) => [p.id, p]));
+      const items: Record<string, CartLine> = {};
+      for (const id of ids) {
+        const fresh = byId.get(id);
+        items[id] = fresh ? { ...state.items[id], product: fresh } : state.items[id];
+      }
+      return { items };
+    }),
 }));
 
 // Derived selectors — return primitives so they are safe to use directly

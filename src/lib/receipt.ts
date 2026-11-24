@@ -1,6 +1,8 @@
 import type { DisplayBill } from '@/api/types';
 import type { PaperWidth } from '@/store/printSettingsStore';
 
+import { RECEIPT_LOGO_DATA_URI } from './receiptLogo';
+
 // ---- Shop details printed in the receipt header ---------------------------
 export const SHOP = {
   name: 'ජය සනු',
@@ -30,18 +32,8 @@ const T = {
   offline: 'Offline — not yet synced',
 };
 
-// Leaf + arecanut logo, drawn as SVG so it prints sharply on thermal paper.
-const LOGO_SVG = `
-<svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M10 46 C6 26 18 8 42 6 C46 26 38 44 18 48 Z"/>
-  <path d="M8 56 L30 22"/>
-  <path d="M22 36 L14 30"/><path d="M26 30 L17 22"/><path d="M30 24 L24 14"/>
-  <path d="M19 42 L30 42"/><path d="M24 34 L36 33"/><path d="M28 27 L39 24"/>
-  <ellipse cx="44" cy="48" rx="6" ry="4.6" transform="rotate(-15 44 48)"/>
-  <ellipse cx="55" cy="44" rx="5.4" ry="4.2" transform="rotate(10 55 44)"/>
-  <ellipse cx="51" cy="55" rx="5.4" ry="4.2" transform="rotate(-5 51 55)"/>
-  <path d="M42 47 q2 -1.5 4 0"/><path d="M53 43 q2 -1.5 4 0"/><path d="M49 54 q2 -1.5 4 0"/>
-</svg>`;
+// Betel leaf & arecanut drawing (see src/lib/receiptLogo.ts).
+const LOGO_IMG = `<img class="logo" src="${RECEIPT_LOGO_DATA_URI}" alt="" />`;
 
 function pad(n: number, len = 2): string {
   return String(n).padStart(len, '0');
@@ -83,9 +75,12 @@ export function billLabel(bill: DisplayBill): string {
 }
 
 // Page geometry per roll width. Printable area is narrower than the roll.
-const LAYOUT: Record<PaperWidth, { paperMm: number; contentMm: number; base: number }> = {
-  '58': { paperMm: 58, contentMm: 48, base: 8.5 },
-  '80': { paperMm: 80, contentMm: 72, base: 10.5 },
+const LAYOUT: Record<
+  PaperWidth,
+  { paperMm: number; contentMm: number; base: number; logoMm: number }
+> = {
+  '58': { paperMm: 58, contentMm: 48, base: 8.5, logoMm: 40 },
+  '80': { paperMm: 80, contentMm: 72, base: 10.5, logoMm: 52 },
 };
 
 // Size of the PDF page in points (1/72 inch), tall enough for every line.
@@ -93,7 +88,7 @@ export function receiptPageSize(bill: DisplayBill, width: PaperWidth) {
   const MM_TO_PT = 72 / 25.4;
   const { paperMm } = LAYOUT[width];
   const perItemMm = width === '58' ? 9 : 7;
-  const heightMm = 150 + bill.items.length * perItemMm;
+  const heightMm = 150 + LAYOUT[width].logoMm * 0.5 + bill.items.length * perItemMm;
   return {
     width: Math.round(paperMm * MM_TO_PT),
     height: Math.round(heightMm * MM_TO_PT),
@@ -101,7 +96,7 @@ export function receiptPageSize(bill: DisplayBill, width: PaperWidth) {
 }
 
 export function buildReceiptHtml(bill: DisplayBill, width: PaperWidth = '58'): string {
-  const { contentMm, base } = LAYOUT[width];
+  const { contentMm, base, logoMm } = LAYOUT[width];
   const created = new Date(bill.createdAt);
   const validDate = !Number.isNaN(created.getTime());
 
@@ -139,7 +134,7 @@ export function buildReceiptHtml(bill: DisplayBill, width: PaperWidth = '58'): s
   .receipt { width: ${contentMm}mm; margin: 0 auto; padding: 3mm 0 6mm; }
   .mono, td.qty, td.amt, .unit { font-family: "Roboto Mono", "Droid Sans Mono", monospace; font-weight: 600; }
   .center { text-align: center; }
-  .logo { width: ${base * 5.2}pt; height: ${base * 5.2}pt; display: block; margin: 0 auto 2pt; }
+  .logo { width: ${logoMm}mm; height: auto; display: block; margin: 0 auto 3pt; }
   .shop { font-size: ${base * 1.6}pt; font-weight: 800; margin: 0; }
   .tagline { font-size: ${base}pt; margin-top: 2pt; }
   .phone { font-size: ${base * 1.15}pt; font-weight: 700; margin-top: 3pt; letter-spacing: 0.5pt; }
@@ -165,7 +160,7 @@ export function buildReceiptHtml(bill: DisplayBill, width: PaperWidth = '58'): s
 <body>
   <div class="receipt">
     <div class="center">
-      ${LOGO_SVG}
+      ${LOGO_IMG}
       <h1 class="shop">${SHOP.name}</h1>
       <div class="tagline">${SHOP.tagline}</div>
       <div class="phone mono">${SHOP.phone}</div>

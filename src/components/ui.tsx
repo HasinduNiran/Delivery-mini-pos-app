@@ -1,18 +1,18 @@
 import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
   Modal,
-  Platform,
   Pressable,
   ScrollView,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { BillStatus, Pagination } from '@/api/types';
+import { useKeyboardHeight } from '@/hooks/useKeyboardHeight';
 
 // ---- Search box ------------------------------------------------------------
 export function SearchBar({
@@ -152,7 +152,7 @@ export function PaginationBar({
           </Text>
         )}
         <Text className="text-[11px] text-slate-500">
-          {total} {noun}
+          {total} {total === 1 ? noun.replace(/s$/, '') : noun}
         </Text>
       </View>
       <Pressable
@@ -240,15 +240,26 @@ export function Sheet({
   footer?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const keyboard = useKeyboardHeight();
+  const { height: windowHeight } = useWindowDimensions();
+  // Sits directly on top of the keyboard when it is open; the body scrolls.
+  const maxHeight = Math.max(240, windowHeight - keyboard - insets.top - 16);
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        className="flex-1">
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      onRequestClose={onClose}>
+      <View className="flex-1">
         <Pressable onPress={onClose} className="flex-1 bg-black/40" />
         <View
-          className="max-h-[88%] rounded-t-3xl bg-slate-50"
-          style={{ paddingBottom: insets.bottom }}>
+          className="rounded-t-3xl bg-slate-50"
+          style={{
+            maxHeight,
+            marginBottom: keyboard,
+            paddingBottom: keyboard > 0 ? 0 : insets.bottom,
+          }}>
           <View className="flex-row items-start justify-between border-b border-slate-200 px-5 pb-3 pt-4">
             <View className="flex-1 pr-3">
               <Text className="text-lg font-bold text-slate-900">{title}</Text>
@@ -267,7 +278,7 @@ export function Sheet({
             <View className="border-t border-slate-200 bg-white px-4 py-3">{footer}</View>
           ) : null}
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
