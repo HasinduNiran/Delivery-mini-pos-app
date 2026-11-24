@@ -32,6 +32,7 @@ export default function BillingScreen() {
   const loadProducts = useProductsStore((s) => s.loadProducts);
   const addItem = useCartStore((s) => s.addItem);
   const cartItems = useCartStore((s) => s.items);
+  const removeItem = useCartStore((s) => s.removeItem);
   const totalCount = useCartStore(selectTotalCount);
   const totalAmount = useCartStore(selectTotalAmount);
 
@@ -141,7 +142,11 @@ export default function BillingScreen() {
             <RefreshControl refreshing={loading} onRefresh={loadProducts} />
           }
           renderItem={({ item }) => (
-            <ItemCard product={item} onPress={() => openQtyPrompt(item)} />
+            <ItemCard
+              product={item}
+              inCart={cartItems[item.id]?.qty ?? 0}
+              onPress={() => openQtyPrompt(item)}
+            />
           )}
         />
       )}
@@ -221,7 +226,20 @@ export default function BillingScreen() {
                   </Pressable>
                 </View>
 
-                <View className="mt-5 flex-row gap-3">
+                {inCart > 0 && (
+                  <Pressable
+                    onPress={() => {
+                      removeItem(selected.id);
+                      closeQtyPrompt();
+                    }}
+                    className="mt-4 items-center rounded-xl border border-red-200 bg-red-50 py-3 active:opacity-70">
+                    <Text className="text-sm font-bold text-red-600">
+                      🗑 Remove from cart ({inCart})
+                    </Text>
+                  </Pressable>
+                )}
+
+                <View className="mt-3 flex-row gap-3">
                   <Pressable
                     onPress={closeQtyPrompt}
                     className="flex-1 items-center rounded-xl bg-slate-100 py-3 active:opacity-70">

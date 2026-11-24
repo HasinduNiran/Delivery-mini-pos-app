@@ -5,21 +5,27 @@ import { formatMoney } from '@/utils/format';
 
 type Props = {
   product: Product;
+  inCart?: number; // quantity already in the cart
   onPress: () => void;
 };
 
-export function ItemCard({ product, onPress }: Props) {
+export function ItemCard({ product, inCart = 0, onPress }: Props) {
   const outOfStock = product.stock <= 0;
 
   return (
     <Pressable
       onPress={onPress}
       disabled={outOfStock}
-      className={`m-1 flex-1 rounded-2xl border border-slate-200 bg-white p-4 active:opacity-70 ${
-        outOfStock ? 'opacity-50' : ''
-      }`}
+      className={`m-1 flex-1 rounded-2xl border bg-white p-4 active:opacity-70 ${
+        inCart > 0 ? 'border-emerald-500' : 'border-slate-200'
+      } ${outOfStock ? 'opacity-50' : ''}`}
       style={{ minHeight: 120 }}
     >
+      {inCart > 0 && (
+        <View className="absolute right-2 top-2 rounded-full bg-emerald-500 px-2 py-0.5">
+          <Text className="text-xs font-bold text-white">{inCart} in cart</Text>
+        </View>
+      )}
       <Text className="mb-2 text-4xl">{product.emoji ?? '🛒'}</Text>
       <Text className="text-sm font-semibold text-slate-800" numberOfLines={1}>
         {product.name}

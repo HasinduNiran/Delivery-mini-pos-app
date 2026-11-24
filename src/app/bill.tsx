@@ -29,6 +29,8 @@ export default function BillScreen() {
   const items = useCartStore((s) => s.items);
   const total = useCartStore(selectTotalAmount);
   const clearCart = useCartStore((s) => s.clearCart);
+  const updateQty = useCartStore((s) => s.updateQty);
+  const removeItem = useCartStore((s) => s.removeItem);
 
   const lines = Object.values(items);
   const [cash, setCash] = useState('');
@@ -235,21 +237,87 @@ export default function BillScreen() {
         </View>
 
         <View className="rounded-2xl bg-white p-4">
-          {lines.map((line) => (
-            <View
-              key={line.product.id}
-              className="flex-row items-center border-b border-dashed border-slate-200 py-2">
-              <Text className="flex-1 text-sm text-slate-800" numberOfLines={1}>
-                {line.product.emoji} {line.product.name}
-              </Text>
-              <Text className="w-20 text-right text-xs text-slate-500">
-                {line.qty} × {formatMoney(line.product.price)}
-              </Text>
-              <Text className="w-24 text-right text-sm font-semibold text-slate-900">
-                {formatMoney(line.qty * line.product.price)}
-              </Text>
-            </View>
-          ))}
+          <View className="mb-1 flex-row items-center justify-between">
+            <Text className="text-sm font-semibold text-slate-600">
+              {lines.length} item{lines.length === 1 ? '' : 's'} in bill
+            </Text>
+            <Pressable
+              onPress={() =>
+                Alert.alert('Clear bill', 'Remove all items from this bill?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Clear all',
+                    style: 'destructive',
+                    onPress: () => {
+                      clearCart();
+                      router.back();
+                    },
+                  },
+                ])
+              }
+              hitSlop={8}
+              className="rounded-lg bg-red-50 px-3 py-1.5 active:opacity-70">
+              <Text className="text-xs font-bold text-red-600">Clear all</Text>
+            </Pressable>
+          </View>
+          {lines.map((line) => {
+            const atMax = line.qty >= line.product.stock;
+            const askRemove = () =>
+              Alert.alert('Remove item', `Remove "${line.product.name}" from this bill?`, [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Remove',
+                  style: 'destructive',
+                  onPress: () => removeItem(line.product.id),
+                },
+              ]);
+            return (
+              <View
+                key={line.product.id}
+                className="border-b border-dashed border-slate-200 py-2.5">
+                <View className="flex-row items-center">
+                  <Text className="flex-1 text-sm font-semibold text-slate-800" numberOfLines={1}>
+                    {line.product.emoji} {line.product.name}
+                  </Text>
+                  <Pressable
+                    onPress={askRemove}
+                    hitSlop={8}
+                    className="ml-2 rounded-lg bg-red-50 px-2.5 py-1 active:opacity-70">
+                    <Text className="text-sm">🗑</Text>
+                  </Pressable>
+                </View>
+                <View className="mt-1.5 flex-row items-center">
+                  <Pressable
+                    onPress={() =>
+                      line.qty <= 1 ? askRemove() : updateQty(line.product.id, line.qty - 1)
+                    }
+                    className="h-9 w-9 items-center justify-center rounded-lg bg-slate-100 active:opacity-70">
+                    <Text className="text-xl font-bold text-slate-700">−</Text>
+                  </Pressable>
+                  <Text className="w-12 text-center text-base font-bold text-slate-900">
+                    {line.qty}
+                  </Text>
+                  <Pressable
+                    disabled={atMax}
+                    onPress={() => updateQty(line.product.id, line.qty + 1)}
+                    className={`h-9 w-9 items-center justify-center rounded-lg active:opacity-70 ${
+                      atMax ? 'bg-slate-50' : 'bg-slate-100'
+                    }`}>
+                    <Text
+                      className={`text-xl font-bold ${atMax ? 'text-slate-300' : 'text-slate-700'}`}>
+                      +
+                    </Text>
+                  </Pressable>
+                  <Text className="ml-2 flex-1 text-xs text-slate-500">
+                    × {formatMoney(line.product.price)}
+                  </Text>
+                  <Text className="text-sm font-bold text-slate-900">
+                    {formatMoney(line.qty * line.product.price)}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
 
           <View className="mt-3 flex-row items-center justify-between">
             <Text className="text-base font-bold text-slate-900">Total</Text>
