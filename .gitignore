@@ -49,3 +49,6 @@ example
 # Android signing credentials (never commit)
 /credentials
 credentials.json
+
+# built APKs for sharing
+/release-apk
