@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { listBills } from '@/api/bills';
 import type { Bill, DisplayBill } from '@/api/types';
+import { PaperSizeToggle } from '@/components/PaperSizeToggle';
 import { printReceipt, shareReceiptPdf } from '@/lib/print';
 import { serverToDisplay, syncPending } from '@/lib/sync';
 import {
@@ -176,11 +177,14 @@ export default function BillsScreen() {
 
   return (
     <View className="flex-1 bg-slate-100" style={{ paddingTop: insets.top }}>
-      <View className="border-b border-slate-200 bg-white px-4 py-3">
-        <Text className="text-xl font-bold text-slate-900">Bills</Text>
-        <Text className="text-sm text-slate-500">
-          Tap a bill to print or re-print
-        </Text>
+      <View className="flex-row items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+        <View className="flex-1">
+          <Text className="text-xl font-bold text-slate-900">Bills</Text>
+          <Text className="text-sm text-slate-500">
+            Tap a bill to print or re-print
+          </Text>
+        </View>
+        <PaperSizeToggle compact />
       </View>
 
       {/* Pending offline bills */}

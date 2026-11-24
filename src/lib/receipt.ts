@@ -1,46 +1,126 @@
 import type { DisplayBill } from '@/api/types';
-import { formatMoney } from '@/utils/format';
+import type { PaperWidth } from '@/store/printSettingsStore';
 
-const STORE_NAME = 'Flowiix Store';
+// ---- Shop details printed in the receipt header ---------------------------
+export const SHOP = {
+  name: 'ජය සනු',
+  tagline: 'බුලත්, පුවක්, බිත්තර සහ සිල්ලර භාණ්ඩ තොග මිලට සපයන්නෝ',
+  phone: '071-5805320',
+};
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
+const ZWJ = '‍'; // needed for Sinhala "yansaya"/"rakaransaya" conjuncts
+
+const T = {
+  billNo: 'බිල් අංකය',
+  date: 'දිනය',
+  time: 'වේලාව',
+  shopName: 'වෙළඳසැලේ නම',
+  item: 'අයිතමය',
+  qty: `ප්${ZWJ}රමාණය`,
+  amount: 'මුදල',
+  total: 'එකතුව',
+  received: 'ලැබුණු මුදල',
+  due: 'හිඟ මුදල',
+  change: 'ඉතිරි මුදල',
+  method: `ගෙවීම් ක්${ZWJ}රමය`,
+  cash: 'Cash / මුදලින්',
+  credit: 'Credit / ණයට',
+  thanks: 'ස්තූතියි! නැවත පැමිණෙන්න.',
+  thanksEn: 'Thank you for your business!',
+  offline: 'Offline — not yet synced',
+};
+
+// Leaf + arecanut logo, drawn as SVG so it prints sharply on thermal paper.
+const LOGO_SVG = `
+<svg class="logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M10 46 C6 26 18 8 42 6 C46 26 38 44 18 48 Z"/>
+  <path d="M8 56 L30 22"/>
+  <path d="M22 36 L14 30"/><path d="M26 30 L17 22"/><path d="M30 24 L24 14"/>
+  <path d="M19 42 L30 42"/><path d="M24 34 L36 33"/><path d="M28 27 L39 24"/>
+  <ellipse cx="44" cy="48" rx="6" ry="4.6" transform="rotate(-15 44 48)"/>
+  <ellipse cx="55" cy="44" rx="5.4" ry="4.2" transform="rotate(10 55 44)"/>
+  <ellipse cx="51" cy="55" rx="5.4" ry="4.2" transform="rotate(-5 51 55)"/>
+  <path d="M42 47 q2 -1.5 4 0"/><path d="M53 43 q2 -1.5 4 0"/><path d="M49 54 q2 -1.5 4 0"/>
+</svg>`;
+
+function pad(n: number, len = 2): string {
+  return String(n).padStart(len, '0');
+}
+
+function formatDate(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function formatTime(d: Date): string {
+  const h = d.getHours();
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${pad(h12)}:${pad(d.getMinutes())} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// Plain number with thousands separators, e.g. 1,250.00
+function num(amount: number): string {
+  const fixed = (Math.round(amount * 100) / 100).toFixed(2);
+  const [i, dec] = fixed.split('.');
+  return `${i.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${dec}`;
+}
+
+function money(amount: number): string {
+  return `Rs. ${num(amount)}`;
 }
 
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
-// 80mm-width receipt HTML, suitable for expo-print's system dialog and for
-// PDFs. Width is set narrow so it also previews like a real receipt roll.
-export function buildReceiptHtml(bill: DisplayBill): string {
-  const billLabel =
-    bill.billNo != null ? `#${bill.billNo}` : bill.localRef ?? '(offline)';
-  const pendingNote =
-    bill.billNo == null
-      ? '<div class="muted" style="margin-top:2px">Offline — not yet synced</div>'
-      : '';
+export function billLabel(bill: DisplayBill): string {
+  if (bill.billNo == null) return bill.localRef ?? 'OFFLINE';
+  const year = new Date(bill.createdAt).getFullYear() || new Date().getFullYear();
+  return `INV-${year}-${pad(bill.billNo, 3)}`;
+}
+
+// Page geometry per roll width. Printable area is narrower than the roll.
+const LAYOUT: Record<PaperWidth, { paperMm: number; contentMm: number; base: number }> = {
+  '58': { paperMm: 58, contentMm: 48, base: 8.5 },
+  '80': { paperMm: 80, contentMm: 72, base: 10.5 },
+};
+
+// Size of the PDF page in points (1/72 inch), tall enough for every line.
+export function receiptPageSize(bill: DisplayBill, width: PaperWidth) {
+  const MM_TO_PT = 72 / 25.4;
+  const { paperMm } = LAYOUT[width];
+  const perItemMm = width === '58' ? 9 : 7;
+  const heightMm = 150 + bill.items.length * perItemMm;
+  return {
+    width: Math.round(paperMm * MM_TO_PT),
+    height: Math.round(heightMm * MM_TO_PT),
+  };
+}
+
+export function buildReceiptHtml(bill: DisplayBill, width: PaperWidth = '58'): string {
+  const { contentMm, base } = LAYOUT[width];
+  const created = new Date(bill.createdAt);
+  const validDate = !Number.isNaN(created.getTime());
+
   const rows = bill.items
-    .map((line) => {
-      const name = `${line.emoji ? `${line.emoji} ` : ''}${escapeHtml(
-        line.name,
-      )}`;
-      return `
-        <tr>
-          <td class="name">${name}</td>
-          <td class="qty">${line.qty}</td>
-          <td class="amt">${formatMoney(line.qty * line.price)}</td>
-        </tr>
-        <tr class="sub"><td colspan="3">${line.qty} × ${formatMoney(
-          line.price,
-        )}</td></tr>`;
-    })
+    .map(
+      (line) => `
+      <tr>
+        <td class="name">${escapeHtml(line.name)}<div class="unit">${num(line.price)} × ${line.qty}</div></td>
+        <td class="qty">${line.qty}</td>
+        <td class="amt">${num(line.qty * line.price)}</td>
+      </tr>`,
+    )
     .join('');
+
+  const dots = '............';
+  const customer = bill.customerName?.trim()
+    ? escapeHtml(bill.customerName.trim())
+    : dots;
+  const isCredit = bill.amountDue > 0;
 
   return `<!DOCTYPE html>
 <html>
@@ -48,79 +128,83 @@ export function buildReceiptHtml(bill: DisplayBill): string {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
+  @page { margin: 0; }
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color:#111; margin:0; padding:16px; }
-  .receipt { width:300px; margin:0 auto; }
-  .center { text-align:center; }
-  h1 { font-size:18px; margin:0 0 2px; }
-  .muted { color:#666; font-size:11px; }
-  .meta { font-size:12px; margin:10px 0; }
-  .meta div { display:flex; justify-content:space-between; }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  thead th { text-align:left; border-bottom:1px solid #000; padding:4px 0; font-size:11px; }
-  th.qty, td.qty { text-align:center; width:34px; }
-  th.amt, td.amt { text-align:right; width:80px; }
-  td.name { padding-top:4px; }
-  tr.sub td { color:#777; font-size:10px; padding-bottom:4px; }
-  .totals { margin-top:8px; border-top:1px dashed #000; padding-top:8px; font-size:13px; }
-  .totals div { display:flex; justify-content:space-between; padding:2px 0; }
-  .grand { font-size:16px; font-weight:700; border-top:1px solid #000; margin-top:4px; padding-top:6px; }
-  .foot { text-align:center; margin-top:14px; font-size:11px; color:#666; }
-  .dashed { border-top:1px dashed #000; margin:8px 0; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: "Noto Sans Sinhala", "Iskoola Pota", "Noto Sans", sans-serif;
+    color: #000; font-size: ${base}pt; line-height: 1.35;
+    -webkit-print-color-adjust: exact;
+  }
+  .receipt { width: ${contentMm}mm; margin: 0 auto; padding: 3mm 0 6mm; }
+  .mono, td.qty, td.amt, .unit { font-family: "Roboto Mono", "Droid Sans Mono", monospace; font-weight: 600; }
+  .center { text-align: center; }
+  .logo { width: ${base * 5.2}pt; height: ${base * 5.2}pt; display: block; margin: 0 auto 2pt; }
+  .shop { font-size: ${base * 1.6}pt; font-weight: 800; margin: 0; }
+  .tagline { font-size: ${base}pt; margin-top: 2pt; }
+  .phone { font-size: ${base * 1.15}pt; font-weight: 700; margin-top: 3pt; letter-spacing: 0.5pt; }
+  .dash { border-top: 1px dashed #000; margin: 5pt 0; }
+  .solid { border-top: 1px solid #000; margin: 5pt 0; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 6pt; padding: 1pt 0; }
+  .row > span:first-child { white-space: nowrap; }
+  .row .v { text-align: right; }
+  .strong { font-weight: 700; }
+  .big { font-size: ${base * 1.15}pt; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { font-weight: 700; padding: 3pt 0; text-align: left; }
+  th.qty, td.qty { text-align: center; width: 22%; }
+  th.amt, td.amt { text-align: right; width: 28%; }
+  td { vertical-align: top; padding: 2pt 0; }
+  .unit { font-size: ${base * 0.85}pt; font-weight: 400; }
+  .duebox { border: 1.5px solid #000; border-radius: 4pt; padding: 3pt 5pt; margin: 4pt 0; }
+  .small { font-size: ${base * 0.9}pt; }
+  .thanks { font-weight: 700; font-size: ${base * 1.1}pt; }
+  .note { font-weight: 700; margin-top: 2pt; }
 </style>
 </head>
 <body>
   <div class="receipt">
     <div class="center">
-      <h1>${STORE_NAME}</h1>
-      <div class="muted">Sales Receipt</div>
-      ${pendingNote}
+      ${LOGO_SVG}
+      <h1 class="shop">${SHOP.name}</h1>
+      <div class="tagline">${SHOP.tagline}</div>
+      <div class="phone mono">${SHOP.phone}</div>
+      ${bill.billNo == null ? `<div class="small note">${T.offline}</div>` : ''}
     </div>
 
-    <div class="meta">
-      <div><span>Bill No</span><span>${billLabel}</span></div>
-      <div><span>Date</span><span>${formatDate(bill.createdAt)}</span></div>
-      <div><span>Items</span><span>${bill.itemCount}</span></div>
-      ${
-        bill.customerName
-          ? `<div><span>Customer</span><span>${escapeHtml(
-              bill.customerName,
-            )}</span></div>`
-          : ''
-      }
-    </div>
+    <div class="dash"></div>
+
+    <div class="row"><span>${T.billNo} :</span><span class="v mono strong">${billLabel(bill)}</span></div>
+    <div class="row"><span>${T.date} :</span><span class="v mono">${validDate ? formatDate(created) : bill.createdAt}</span></div>
+    <div class="row"><span>${T.time} :</span><span class="v mono">${validDate ? formatTime(created) : ''}</span></div>
+
+    <div class="solid"></div>
+    <div class="row"><span>${T.shopName} :</span><span class="v strong big">${customer}</span></div>
+    <div class="solid"></div>
 
     <table>
       <thead>
-        <tr><th>Item</th><th class="qty">Qty</th><th class="amt">Amount</th></tr>
+        <tr><th>${T.item}</th><th class="qty">${T.qty}</th><th class="amt">${T.amount}</th></tr>
       </thead>
-      <tbody>${rows}</tbody>
     </table>
+    <div class="solid" style="margin-top:0"></div>
+    <table><tbody>${rows}</tbody></table>
+    <div class="solid"></div>
 
-    <div class="totals">
-      <div class="grand"><span>Total</span><span>${formatMoney(
-        bill.total,
-      )}</span></div>
-      <div><span>Cash</span><span>${formatMoney(bill.cashReceived)}</span></div>
-      ${
-        bill.amountDue > 0
-          ? `<div style="font-weight:700"><span>Balance Due</span><span>${formatMoney(
-              bill.amountDue,
-            )}</span></div>`
-          : `<div><span>Change</span><span>${formatMoney(
-              bill.balance,
-            )}</span></div>`
-      }
-    </div>
+    <div class="row strong big"><span>${T.total}</span><span class="v mono">${money(bill.total)}</span></div>
+    <div class="row"><span>${T.received}</span><span class="v mono">${money(bill.cashReceived)}</span></div>
+    <div class="row duebox strong big"><span>${T.due}</span><span class="v mono">${money(bill.amountDue)}</span></div>
     ${
-      bill.amountDue > 0
-        ? '<div class="foot" style="color:#b91c1c;font-weight:700;margin-top:8px">** CREDIT — BALANCE DUE **</div>'
+      !isCredit && bill.balance > 0
+        ? `<div class="row"><span>${T.change}</span><span class="v mono">${money(bill.balance)}</span></div>`
         : ''
     }
+    <div class="row small"><span>${T.method}:</span><span class="v strong">${isCredit ? T.credit : T.cash}</span></div>
 
-    <div class="foot">
-      Thank you for your purchase!<br/>
-      Powered by Flowiix POS
+    <div class="dash"></div>
+    <div class="center">
+      <div class="thanks">${T.thanks}</div>
+      <div class="small">${T.thanksEn}</div>
     </div>
   </div>
 </body>

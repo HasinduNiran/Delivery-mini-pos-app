@@ -13,7 +13,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DisplayBill } from '@/api/types';
 import { ApiError } from '@/api/client';
+import { PaperSizeToggle } from '@/components/PaperSizeToggle';
 import { printReceipt, shareReceiptPdf } from '@/lib/print';
+import { SHOP } from '@/lib/receipt';
 import { submitSale } from '@/lib/sync';
 import { selectTotalAmount, useCartStore } from '@/store/cartStore';
 import { formatMoney } from '@/utils/format';
@@ -138,6 +140,13 @@ export default function BillScreen() {
             )}
           </View>
 
+          <View className="mt-4 flex-row items-center justify-between rounded-2xl bg-white px-4 py-3">
+            <Text className="text-sm font-medium text-slate-600">
+              Receipt paper size
+            </Text>
+            <PaperSizeToggle compact />
+          </View>
+
           <Pressable
             disabled={printing}
             onPress={() => handlePrint('system')}
@@ -190,7 +199,7 @@ export default function BillScreen() {
     <View className="flex-1 bg-slate-100">
       <ScrollView contentContainerStyle={{ padding: 16 }}>
         <View className="items-center pb-4">
-          <Text className="text-lg font-bold text-slate-900">Flowiix Store</Text>
+          <Text className="text-lg font-bold text-slate-900">{SHOP.name}</Text>
           <Text className="text-xs text-slate-500">Sales Bill</Text>
         </View>
 
