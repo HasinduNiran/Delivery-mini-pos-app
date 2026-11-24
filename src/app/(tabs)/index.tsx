@@ -87,11 +87,9 @@ export default function BillingScreen() {
         <Text className="text-sm text-slate-500">
           Tap items to build the bill
         </Text>
-        {products.length > 6 && (
-          <View className="mt-2">
-            <SearchBar value={search} onChangeText={setSearch} placeholder="Search items" />
-          </View>
-        )}
+        <View className="mt-2">
+          <SearchBar value={search} onChangeText={setSearch} placeholder="Search items" />
+        </View>
       </View>
 
       {error && products.length > 0 && (
