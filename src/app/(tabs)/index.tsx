@@ -1,6 +1,6 @@
 import { FlashList } from '@shopify/flash-list';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -13,6 +13,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ItemCard } from '@/components/ItemCard';
+import { SearchBar } from '@/components/ui';
 import type { Product } from '@/store/cartStore';
 import {
   selectTotalAmount,
@@ -37,6 +38,12 @@ export default function BillingScreen() {
   useEffect(() => {
     loadProducts();
   }, [loadProducts]);
+
+  const [search, setSearch] = useState('');
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? products.filter((p) => p.name.toLowerCase().includes(q)) : products;
+  }, [products, search]);
 
   // Quantity prompt state — opens when an item is tapped.
   const [selected, setSelected] = useState<Product | null>(null);
@@ -80,6 +87,11 @@ export default function BillingScreen() {
         <Text className="text-sm text-slate-500">
           Tap items to build the bill
         </Text>
+        {products.length > 6 && (
+          <View className="mt-2">
+            <SearchBar value={search} onChangeText={setSearch} placeholder="Search items" />
+          </View>
+        )}
       </View>
 
       {error && products.length > 0 && (
@@ -111,8 +123,14 @@ export default function BillingScreen() {
         </View>
       ) : (
         <FlashList
-          data={products}
+          data={shown}
           numColumns={2}
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={
+            <Text className="py-10 text-center text-sm text-slate-500">
+              No items match “{search}”.
+            </Text>
+          }
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: 8 }}
           refreshControl={

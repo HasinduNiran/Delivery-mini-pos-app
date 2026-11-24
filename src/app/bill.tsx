@@ -1,5 +1,5 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -12,8 +12,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DisplayBill } from '@/api/types';
+import { listCustomerNames } from '@/api/bills';
 import { ApiError } from '@/api/client';
 import { PaperSizeToggle } from '@/components/PaperSizeToggle';
+import { useDebounced } from '@/hooks/usePagedList';
 import { printReceipt, shareReceiptPdf } from '@/lib/print';
 import { SHOP } from '@/lib/receipt';
 import { submitSale } from '@/lib/sync';
@@ -34,12 +36,37 @@ export default function BillScreen() {
   const isCredit = cashNum < total; // short payment => sold on credit
   const amountDue = isCredit ? total - cashNum : 0;
 
+  // Credit sales must name the customer so the debt can be collected later.
+  const needsName = isCredit && customerName.trim().length === 0;
+
+  // Suggest previously used customer names (keeps spellings consistent so
+  // all of a shop's credit adds up under one name in the ledger).
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const nameQuery = useDebounced(customerName.trim(), 300);
+  useEffect(() => {
+    if (!isCredit) return;
+    let cancelled = false;
+    listCustomerNames(nameQuery)
+      .then((r) => !cancelled && setSuggestions(r.data))
+      .catch(() => !cancelled && setSuggestions([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [nameQuery, isCredit]);
+
   const [submitting, setSubmitting] = useState(false);
   const [completed, setCompleted] = useState<DisplayBill | null>(null);
   const [printing, setPrinting] = useState(false);
 
   async function completeSale() {
     if (submitting) return;
+    if (needsName) {
+      Alert.alert(
+        'Customer name needed',
+        'Cash is less than the total, so this is a credit sale. Enter the customer / shop name so the balance can be collected later.',
+      );
+      return;
+    }
     setSubmitting(true);
     const sold = lines.map((line) => ({
       productId: line.product.id,
@@ -263,10 +290,26 @@ export default function BillScreen() {
             <TextInput
               value={customerName}
               onChangeText={setCustomerName}
-              placeholder="Who owes this balance?"
+              placeholder="Shop / customer name (required)"
               placeholderTextColor="#94a3b8"
-              className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-3 text-base text-slate-900"
+              className={`rounded-xl border bg-slate-50 px-3 py-3 text-base text-slate-900 ${
+                needsName ? 'border-red-400' : 'border-slate-300'
+              }`}
             />
+            {suggestions.filter((n) => n !== customerName.trim()).length > 0 && (
+              <View className="mt-2 flex-row flex-wrap gap-1.5">
+                {suggestions
+                  .filter((n) => n !== customerName.trim())
+                  .map((n) => (
+                    <Pressable
+                      key={n}
+                      onPress={() => setCustomerName(n)}
+                      className="rounded-full border border-slate-300 bg-white px-3 py-1.5 active:opacity-70">
+                      <Text className="text-xs font-semibold text-slate-700">{n}</Text>
+                    </Pressable>
+                  ))}
+              </View>
+            )}
             <Text className="mt-2 text-xs text-amber-600">
               This sale will be recorded as credit and listed in the ledger
               until it’s settled.
@@ -282,7 +325,11 @@ export default function BillScreen() {
           disabled={submitting}
           onPress={completeSale}
           className={`items-center rounded-xl py-4 active:opacity-80 ${
-            submitting ? 'bg-slate-300' : isCredit ? 'bg-amber-500' : 'bg-emerald-500'
+            submitting || needsName
+              ? 'bg-slate-300'
+              : isCredit
+                ? 'bg-amber-500'
+                : 'bg-emerald-500'
           }`}>
           {submitting ? (
             <ActivityIndicator color="#fff" />

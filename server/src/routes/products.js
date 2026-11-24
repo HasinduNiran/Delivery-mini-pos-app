@@ -48,7 +48,10 @@ router.get(
     const filter = {};
     if (req.query.includeInactive !== 'true') filter.active = true;
     if (req.query.search) {
-      filter.name = { $regex: String(req.query.search).trim(), $options: 'i' };
+      const term = String(req.query.search)
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.name = { $regex: term, $options: 'i' };
     }
 
     const [data, total] = await Promise.all([

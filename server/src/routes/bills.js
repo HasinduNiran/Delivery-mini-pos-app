@@ -149,38 +149,309 @@ router.post(
   }),
 );
 
-// GET /api/bills?page=&limit=  (newest first, paginated)
+// ---- helpers ---------------------------------------------------------------
+
+const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Case-insensitive exact match on a customer name (ignores surrounding space).
+const exactName = (name) =>
+  new RegExp(`^\\s*${escapeRegex(String(name).trim())}\\s*$`, 'i');
+
+const mapLean = ({ _id, __v, ...rest }) => ({ id: _id.toString(), ...rest });
+
+function parseDate(value, name) {
+  if (value === undefined || value === '') return undefined;
+  const d = new Date(String(value));
+  if (Number.isNaN(d.getTime())) throw httpError(400, `Invalid "${name}" date`);
+  return d;
+}
+
+// Builds the Mongo filter for bill listings from query params:
+//   status=paid,credit,settled   search=<bill no | INV-2026-007 | name>
+//   customer=<exact name>        from=<ISO>  to=<ISO>
+function buildBillFilter(query) {
+  const filter = {};
+  if (query.status) {
+    const statuses = String(query.status)
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => ['paid', 'credit', 'settled'].includes(s));
+    if (statuses.length === 0) throw httpError(400, 'Invalid status filter');
+    filter.status = { $in: statuses };
+  }
+
+  const search = typeof query.search === 'string' ? query.search.trim() : '';
+  if (search) {
+    // "12", "#12" or "INV-2026-012" all find bill number 12.
+    const numMatch = search.match(/^(?:#|inv-\d{4}-)?0*(\d+)$/i);
+    const or = [{ customerName: { $regex: escapeRegex(search), $options: 'i' } }];
+    if (numMatch) or.push({ billNo: Number(numMatch[1]) });
+    filter.$or = or;
+  }
+
+  if (query.customer !== undefined) {
+    const name = String(query.customer).trim();
+    filter.customerName = name ? exactName(name) : { $in: ['', null] };
+  }
+
+  const from = parseDate(query.from, 'from');
+  const to = parseDate(query.to, 'to');
+  if (from || to) {
+    filter.createdAt = {};
+    if (from) filter.createdAt.$gte = from;
+    if (to) filter.createdAt.$lte = to;
+  }
+  return filter;
+}
+
+// Group key so "Widura Stores" and "widura stores " count as one customer.
+const customerKey = {
+  $toLower: { $trim: { input: { $ifNull: ['$customerName', ''] } } },
+};
+
+// Mutates a credit bill to record `amount` received now.
+function applyPayment(bill, amount, at = new Date()) {
+  bill.cashReceived = round2(bill.cashReceived + amount);
+  bill.amountDue = round2(Math.max(0, bill.amountDue - amount));
+  bill.balance = round2(bill.cashReceived - bill.total);
+  bill.payments = [...(bill.payments || []), { amount, at }];
+  if (bill.amountDue <= 0) {
+    bill.amountDue = 0;
+    bill.status = 'settled';
+    bill.settledAt = at;
+  }
+}
+
+// ---- list ------------------------------------------------------------------
+
+// GET /api/bills?page=&limit=&status=&search=&customer=&from=&to=
+// Newest first, paginated. `summary` totals the whole filtered set (not just
+// the page) so screens can show accurate sales / outstanding figures.
 router.get(
   '/',
   asyncHandler(async (req, res) => {
     const { page, limit, skip } = getPagination(req.query, {
       defaultLimit: 20,
     });
+    const filter = buildBillFilter(req.query);
 
-    // Optional status filter powers the credit ledger (?status=credit).
-    const filter = {};
-    if (req.query.status) {
-      const statuses = String(req.query.status)
-        .split(',')
-        .map((s) => s.trim())
-        .filter((s) => ['paid', 'credit', 'settled'].includes(s));
-      if (statuses.length === 0) throw httpError(400, 'Invalid status filter');
-      filter.status = { $in: statuses };
-    }
-
-    const [data, total] = await Promise.all([
+    const [data, agg] = await Promise.all([
       Bill.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      // estimatedDocumentCount ignores filters; use countDocuments when one is
-      // present, otherwise the fast collection-wide estimate.
-      Object.keys(filter).length
-        ? Bill.countDocuments(filter)
-        : Bill.estimatedDocumentCount(),
+      Bill.aggregate([
+        { $match: filter },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            total: { $sum: '$total' },
+            profit: { $sum: '$profit' },
+            due: { $sum: '$amountDue' },
+          },
+        },
+      ]),
     ]);
-    const mapped = data.map(({ _id, __v, ...rest }) => ({
-      id: _id.toString(),
-      ...rest,
+    const s = agg[0] || { count: 0, total: 0, profit: 0, due: 0 };
+    res.json({
+      ...paginated(data.map(mapLean), s.count, page, limit),
+      summary: {
+        count: s.count,
+        total: round2(s.total),
+        profit: round2(s.profit),
+        due: round2(s.due),
+      },
+    });
+  }),
+);
+
+// ---- credit ledger ---------------------------------------------------------
+
+// GET /api/bills/credit/customers?page=&limit=&search=
+// Outstanding credit grouped per customer (largest debt first), plus overall
+// totals across every unpaid bill.
+router.get(
+  '/credit/customers',
+  asyncHandler(async (req, res) => {
+    const { page, limit, skip } = getPagination(req.query, {
+      defaultLimit: 20,
+    });
+    const search =
+      typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const match = { status: 'credit' };
+
+    const [listAgg, totalsAgg] = await Promise.all([
+      Bill.aggregate([
+        { $match: match },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: customerKey,
+            name: { $first: '$customerName' },
+            due: { $sum: '$amountDue' },
+            total: { $sum: '$total' },
+            bills: { $sum: 1 },
+            oldest: { $min: '$createdAt' },
+            latest: { $max: '$createdAt' },
+          },
+        },
+        ...(search
+          ? [{ $match: { name: { $regex: escapeRegex(search), $options: 'i' } } }]
+          : []),
+        { $sort: { due: -1, _id: 1 } },
+        {
+          $facet: {
+            data: [{ $skip: skip }, { $limit: limit }],
+            count: [{ $count: 'n' }],
+          },
+        },
+      ]),
+      Bill.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: null,
+            due: { $sum: '$amountDue' },
+            bills: { $sum: 1 },
+            customers: { $addToSet: customerKey },
+          },
+        },
+      ]),
+    ]);
+
+    const rows = listAgg[0].data.map((r) => ({
+      key: r._id,
+      name: (r.name || '').trim(),
+      due: round2(r.due),
+      total: round2(r.total),
+      bills: r.bills,
+      oldest: r.oldest,
+      latest: r.latest,
     }));
-    res.json(paginated(mapped, total, page, limit));
+    const count = listAgg[0].count[0]?.n || 0;
+    const t = totalsAgg[0];
+    res.json({
+      ...paginated(rows, count, page, limit),
+      summary: {
+        due: round2(t?.due || 0),
+        bills: t?.bills || 0,
+        customers: t ? t.customers.length : 0,
+      },
+    });
+  }),
+);
+
+// POST /api/bills/credit/customers/pay  { name, amount }
+// Records a lump-sum payment from a customer, clearing their oldest unpaid
+// bills first. Returns how it was applied and what is still owed.
+router.post(
+  '/credit/customers/pay',
+  asyncHandler(async (req, res) => {
+    const { name, amount } = req.body || {};
+    if (typeof name !== 'string') throw httpError(400, '"name" is required');
+    const pay = round2(Number(amount));
+    if (!Number.isFinite(pay) || pay <= 0) {
+      throw httpError(400, '"amount" must be a number > 0');
+    }
+    const nameFilter = name.trim() ? exactName(name) : { $in: ['', null] };
+
+    const session = await mongoose.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        const bills = await Bill.find({
+          status: 'credit',
+          customerName: nameFilter,
+        })
+          .sort({ createdAt: 1 })
+          .session(session);
+        if (bills.length === 0) {
+          throw httpError(404, 'No unpaid bills for this customer');
+        }
+        const owed = round2(bills.reduce((sum, b) => sum + b.amountDue, 0));
+        if (pay > owed + 0.001) {
+          throw httpError(
+            400,
+            `Amount is more than the outstanding Rs. ${owed.toFixed(2)}`,
+          );
+        }
+
+        let left = pay;
+        const applied = [];
+        const now = new Date();
+        for (const bill of bills) {
+          if (left <= 0) break;
+          const part = round2(Math.min(left, bill.amountDue));
+          applyPayment(bill, part, now);
+          await bill.save({ session });
+          applied.push({
+            id: bill.id,
+            billNo: bill.billNo,
+            amount: part,
+            settled: bill.status === 'settled',
+          });
+          left = round2(left - part);
+        }
+        result = { applied, paid: pay, remaining: round2(owed - pay) };
+      });
+      res.json(result);
+    } finally {
+      await session.endSession();
+    }
+  }),
+);
+
+// GET /api/bills/customers?search=&limit=
+// Known customer names (most recently used first) for name suggestions.
+router.get(
+  '/customers',
+  asyncHandler(async (req, res) => {
+    const limit = Math.min(20, Math.max(1, parseInt(req.query.limit, 10) || 8));
+    const search =
+      typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const match = search
+      ? { customerName: { $regex: escapeRegex(search), $options: 'i' } }
+      : { customerName: { $nin: ['', null] } };
+    const rows = await Bill.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: customerKey,
+          name: { $first: '$customerName' },
+          last: { $max: '$createdAt' },
+        },
+      },
+      { $sort: { last: -1 } },
+      { $limit: limit },
+    ]);
+    res.json({ data: rows.map((r) => r.name.trim()).filter(Boolean) });
+  }),
+);
+
+// POST /api/bills/:id/payments  { amount }  — partial or full credit payment.
+router.post(
+  '/:id/payments',
+  asyncHandler(async (req, res) => {
+    if (!mongoose.isValidObjectId(req.params.id)) {
+      throw httpError(400, 'Invalid bill id');
+    }
+    const pay = round2(Number(req.body?.amount));
+    if (!Number.isFinite(pay) || pay <= 0) {
+      throw httpError(400, '"amount" must be a number > 0');
+    }
+    const bill = await Bill.findById(req.params.id);
+    if (!bill) throw httpError(404, 'Bill not found');
+    if (bill.status !== 'credit') {
+      throw httpError(409, 'This bill has no balance due');
+    }
+    if (pay > bill.amountDue + 0.001) {
+      throw httpError(
+        400,
+        `Amount is more than the balance due Rs. ${bill.amountDue.toFixed(2)}`,
+      );
+    }
+    applyPayment(bill, Math.min(pay, bill.amountDue));
+    await bill.save();
+    res.json(bill.toJSON());
   }),
 );
 
@@ -196,11 +467,7 @@ router.patch(
     if (bill.status !== 'credit') {
       throw httpError(409, 'Only credit bills can be settled');
     }
-    bill.cashReceived = bill.total;
-    bill.balance = 0;
-    bill.amountDue = 0;
-    bill.status = 'settled';
-    bill.settledAt = new Date();
+    applyPayment(bill, bill.amountDue);
     await bill.save();
     res.json(bill.toJSON());
   }),

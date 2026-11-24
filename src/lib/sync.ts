@@ -94,6 +94,8 @@ export function serverToDisplay(b: Bill): DisplayBill {
     amountDue: b.amountDue ?? Math.max(0, round2(b.total - b.cashReceived)),
     customerName: b.customerName,
     status: b.status ?? (b.cashReceived < b.total ? 'credit' : 'paid'),
+    payments: b.payments,
+    settledAt: b.settledAt,
     itemCount: b.itemCount,
     createdAt: b.createdAt,
     synced: true,

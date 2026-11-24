@@ -6,6 +6,7 @@ import {
   deleteProduct,
   listProducts,
   type ProductInput,
+  updateProduct,
 } from '@/api/products';
 import type { Product } from '@/store/cartStore';
 import {
@@ -21,6 +22,7 @@ type ProductsState = {
   hydrated: boolean; // AsyncStorage cache restored
   loadProducts: () => Promise<void>;
   addProduct: (data: ProductInput) => Promise<void>;
+  editProduct: (id: string, data: Partial<ProductInput>) => Promise<void>;
   removeProduct: (id: string) => Promise<void>;
   // Optimistically apply stock changes after a completed sale.
   applyStockAfterBill: (sold: { productId: string; qty: number }[]) => void;
@@ -72,6 +74,13 @@ export const useProductsStore = create<ProductsState>()(
       addProduct: async (data) => {
         const created = await createProduct(data);
         set((state) => ({ products: [created, ...state.products] }));
+      },
+
+      editProduct: async (id, data) => {
+        const updated = await updateProduct(id, data);
+        set((state) => ({
+          products: state.products.map((p) => (p.id === id ? updated : p)),
+        }));
       },
 
       removeProduct: async (id) => {

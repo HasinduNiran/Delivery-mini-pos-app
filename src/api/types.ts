@@ -8,10 +8,34 @@ export type Pagination = {
   hasMore: boolean;
 };
 
-export type Paginated<T> = {
+export type Paginated<T, S = undefined> = {
   data: T[];
   pagination: Pagination;
+  summary?: S;
 };
+
+// Totals across the whole filtered set (not just the current page).
+export type BillsSummary = {
+  count: number;
+  total: number;
+  profit: number;
+  due: number;
+};
+
+export type CreditPayment = { amount: number; at: string };
+
+// One row of the credit ledger: everything a customer still owes.
+export type CreditCustomer = {
+  key: string;
+  name: string; // '' for credit bills saved without a name
+  due: number;
+  total: number;
+  bills: number;
+  oldest: string;
+  latest: string;
+};
+
+export type CreditSummary = { due: number; bills: number; customers: number };
 
 export type BillItem = {
   productId: string;
@@ -37,6 +61,7 @@ export type Bill = {
   customerName?: string;
   status: BillStatus;
   settledAt?: string;
+  payments?: CreditPayment[];
   itemCount: number;
   createdAt: string;
   updatedAt: string;
@@ -57,6 +82,8 @@ export type DisplayBill = {
   amountDue: number; // outstanding credit (0 for fully paid bills)
   customerName?: string;
   status: BillStatus;
+  payments?: CreditPayment[];
+  settledAt?: string;
   itemCount: number;
   createdAt: string;
   synced: boolean;

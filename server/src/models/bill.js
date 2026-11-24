@@ -14,6 +14,15 @@ const billItemSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// A payment received against a credit bill after the sale.
+const paymentSchema = new mongoose.Schema(
+  {
+    amount: { type: Number, required: true, min: 0 },
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const billSchema = new mongoose.Schema(
   {
     billNo: { type: Number, required: true, unique: true },
@@ -38,6 +47,7 @@ const billSchema = new mongoose.Schema(
       default: 'paid',
     },
     settledAt: { type: Date }, // when a credit bill was marked paid
+    payments: { type: [paymentSchema], default: undefined }, // later credit payments
     itemCount: { type: Number, required: true, min: 0 },
   },
   { timestamps: true },

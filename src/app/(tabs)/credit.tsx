@@ -1,214 +1,386 @@
 import { FlashList } from '@shopify/flash-list';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  RefreshControl,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, Pressable, RefreshControl, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { listBills, settleBill } from '@/api/bills';
-import type { Bill } from '@/api/types';
+import { listBills, listCreditCustomers, payCustomer } from '@/api/bills';
+import type { Bill, BillsSummary, CreditCustomer, CreditSummary, DisplayBill } from '@/api/types';
+import { BillDetailSheet } from '@/components/BillDetailSheet';
+import { PaymentForm } from '@/components/PaymentForm';
+import {
+  type ChipOption,
+  ListPlaceholder,
+  PaginationBar,
+  SearchBar,
+  Segmented,
+  Sheet,
+  StatusBadge,
+} from '@/components/ui';
+import { useDebounced, usePagedList } from '@/hooks/usePagedList';
+import { billLabel } from '@/lib/receipt';
+import { serverToDisplay } from '@/lib/sync';
 import { useOfflineBillsStore } from '@/store/offlineBillsStore';
-import { formatMoney } from '@/utils/format';
+import { daysAgo, formatDate, formatMoney } from '@/utils/format';
 
 const PAGE_SIZE = 20;
+const NO_NAME = 'No name';
 
-function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString();
+type View_ = 'customers' | 'unpaid' | 'history';
+const VIEWS: ChipOption<View_>[] = [
+  { value: 'customers', label: 'Customers' },
+  { value: 'unpaid', label: 'Unpaid bills' },
+  { value: 'history', label: 'Paid history' },
+];
+
+// Placeholder page for the list that isn't on screen (avoids extra requests).
+const emptyPage = () =>
+  Promise.resolve({
+    data: [],
+    pagination: { page: 1, limit: PAGE_SIZE, total: 0, totalPages: 1, hasMore: false },
+  });
+
+function ageLabel(iso: string): string {
+  const d = daysAgo(iso);
+  if (d === 0) return 'today';
+  if (d === 1) return '1 day';
+  return `${d} days`;
+}
+
+// ---- Customer ledger sheet ---------------------------------------------------
+function CustomerSheet({
+  customer,
+  onClose,
+  onChanged,
+  onOpenBill,
+}: {
+  customer: CreditCustomer | null;
+  onClose: () => void;
+  onChanged: () => void;
+  onOpenBill: (b: DisplayBill) => void;
+}) {
+  const [bills, setBills] = useState<Bill[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [nonce, setNonce] = useState(0);
+  const name = customer?.name ?? null;
+
+  useEffect(() => {
+    if (name === null) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setLoading(true);
+        return listBills({ status: 'credit', customer: name, limit: 100 });
+      })
+      .then((res) => !cancelled && setBills(res.data))
+      .catch((err: Error) => !cancelled && Alert.alert('Could not load bills', err.message))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [name, nonce]);
+
+  if (!customer) return null;
+  const due = bills.length ? bills.reduce((s, b) => s + b.amountDue, 0) : customer.due;
+
+  async function receive(amount: number) {
+    const res = await payCustomer(customer!.name, amount);
+    onChanged();
+    setNonce((n) => n + 1);
+    const cleared = res.applied.filter((a) => a.settled).length;
+    Alert.alert(
+      'Payment saved',
+      `${formatMoney(res.paid)} received.\n` +
+        (cleared ? `${cleared} bill${cleared === 1 ? '' : 's'} fully paid.\n` : '') +
+        (res.remaining > 0 ? `Still owed: ${formatMoney(res.remaining)}` : 'All bills cleared! 🎉'),
+    );
+    if (res.remaining <= 0) onClose();
+  }
+
+  return (
+    <Sheet
+      visible
+      onClose={onClose}
+      title={customer.name || NO_NAME}
+      subtitle={`${customer.bills} unpaid bill${customer.bills === 1 ? '' : 's'} · oldest ${formatDate(customer.oldest)}`}>
+      <View className="mb-3 items-center rounded-2xl bg-slate-900 py-4">
+        <Text className="text-xs text-slate-400">Total owed</Text>
+        <Text className="text-3xl font-bold text-amber-400">{formatMoney(due)}</Text>
+      </View>
+
+      <PaymentForm
+        due={Math.round(due * 100) / 100}
+        onSubmit={receive}
+        label="Receive payment (oldest bills are cleared first)"
+      />
+
+      <Text className="mb-1 mt-4 text-sm font-semibold text-slate-700">Unpaid bills</Text>
+      {loading && bills.length === 0 ? (
+        <ActivityIndicator className="py-6" color="#10b981" />
+      ) : (
+        bills.map((b) => (
+          <Pressable
+            key={b.id}
+            onPress={() => onOpenBill(serverToDisplay(b))}
+            className="mb-2 flex-row items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 active:opacity-70">
+            <View>
+              <Text className="text-sm font-bold text-slate-900">{billLabel(serverToDisplay(b))}</Text>
+              <Text className="text-xs text-slate-500">
+                {formatDate(b.createdAt)} · {ageLabel(b.createdAt)} · total {formatMoney(b.total)}
+              </Text>
+            </View>
+            <Text className="text-sm font-bold text-red-600">{formatMoney(b.amountDue)}</Text>
+          </Pressable>
+        ))
+      )}
+    </Sheet>
+  );
 }
 
 export default function CreditScreen() {
   const insets = useSafeAreaInsets();
-  // Offline credit bills that haven't synced yet — shown but not settleable.
-  const pendingCredit = useOfflineBillsStore((s) =>
-    s.queue.filter((b) => b.paymentStatus === 'credit'),
+  const queue = useOfflineBillsStore((s) => s.queue);
+  const pendingCredit = useMemo(
+    () => queue.filter((b) => b.paymentStatus === 'credit'),
+    [queue],
+  );
+  const pendingDue = pendingCredit.reduce((s, b) => s + b.amountDue, 0);
+
+  const [view, setView] = useState<View_>('customers');
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounced(search.trim());
+  const [customer, setCustomer] = useState<CreditCustomer | null>(null);
+  const [bill, setBill] = useState<DisplayBill | null>(null);
+
+  // Overall totals (all unpaid bills, not just this page).
+  const [totals, setTotals] = useState<CreditSummary | null>(null);
+  const [totalsNonce, setTotalsNonce] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    listCreditCustomers({ limit: 1 })
+      .then((r) => !cancelled && r.summary && setTotals(r.summary))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [totalsNonce]);
+  useFocusEffect(useCallback(() => setTotalsNonce((n) => n + 1), []));
+
+  const customers = usePagedList<CreditCustomer, CreditSummary>(
+    (page) =>
+      view !== 'customers'
+        ? emptyPage()
+        : listCreditCustomers({ page, limit: PAGE_SIZE, search: debouncedSearch || undefined }),
+    `c:${view === 'customers'}:${debouncedSearch}`,
+  );
+  const billsList = usePagedList<Bill, BillsSummary>(
+    (page) =>
+      view === 'customers'
+        ? emptyPage()
+        : listBills({
+            page,
+            limit: PAGE_SIZE,
+            status: view === 'unpaid' ? 'credit' : 'settled',
+            search: debouncedSearch || undefined,
+          }),
+    `b:${view}:${debouncedSearch}`,
   );
 
-  const [bills, setBills] = useState<Bill[]>([]);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [settlingId, setSettlingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchPage = useCallback(async (pageToLoad: number, replace: boolean) => {
-    if (replace) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-    try {
-      const res = await listBills({
-        page: pageToLoad,
-        limit: PAGE_SIZE,
-        status: 'credit',
-      });
-      setBills((prev) => (replace ? res.data : [...prev, ...res.data]));
-      setHasMore(res.pagination.hasMore);
-      setPage(pageToLoad);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchPage(1, true);
-  }, [fetchPage]);
-
-  function loadMore() {
-    if (loading || refreshing || !hasMore) return;
-    fetchPage(page + 1, false);
+  function refreshAll() {
+    setTotalsNonce((n) => n + 1);
+    customers.reload();
+    billsList.reload();
   }
 
-  function confirmSettle(bill: Bill) {
-    const who = bill.customerName ? ` from ${bill.customerName}` : '';
-    Alert.alert(
-      'Mark as paid',
-      `Received ${formatMoney(bill.amountDue)}${who} for Bill #${bill.billNo}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Mark paid', onPress: () => settle(bill.id) },
-      ],
-    );
-  }
-
-  async function settle(id: string) {
-    setSettlingId(id);
-    try {
-      await settleBill(id);
-      // Drop it from the outstanding list immediately.
-      setBills((prev) => prev.filter((b) => b.id !== id));
-    } catch (err) {
-      Alert.alert('Could not settle', (err as Error).message);
-    } finally {
-      setSettlingId(null);
-    }
-  }
-
-  // Total still owed across everything currently visible.
-  const outstanding = useMemo(() => {
-    const synced = bills.reduce((sum, b) => sum + b.amountDue, 0);
-    const offline = pendingCredit.reduce((sum, b) => sum + b.amountDue, 0);
-    return synced + offline;
-  }, [bills, pendingCredit]);
-
-  const isEmpty =
-    bills.length === 0 && pendingCredit.length === 0 && !loading && !refreshing;
+  const active = view === 'customers' ? customers : billsList;
 
   return (
     <View className="flex-1 bg-slate-100" style={{ paddingTop: insets.top }}>
-      <View className="border-b border-slate-200 bg-white px-4 py-3">
+      <View className="gap-2 border-b border-slate-200 bg-white px-4 pb-3 pt-3">
         <Text className="text-xl font-bold text-slate-900">Credit Ledger</Text>
-        <Text className="text-sm text-slate-500">
-          Unpaid bills — mark as paid when settled
-        </Text>
+
+        <View className="flex-row items-center justify-between rounded-2xl bg-slate-900 px-4 py-3">
+          <View>
+            <Text className="text-xs text-slate-400">Total outstanding</Text>
+            <Text className="text-2xl font-bold text-amber-400">
+              {totals ? formatMoney(totals.due + pendingDue) : '—'}
+            </Text>
+          </View>
+          <View className="items-end">
+            <Text className="text-xs text-slate-300">
+              {totals ? `${totals.customers} customer${totals.customers === 1 ? '' : 's'}` : ''}
+            </Text>
+            <Text className="text-xs text-slate-300">
+              {totals ? `${totals.bills + pendingCredit.length} unpaid bills` : ''}
+            </Text>
+          </View>
+        </View>
+
+        <Segmented
+          options={VIEWS}
+          value={view}
+          onChange={(v) => {
+            setView(v);
+          }}
+        />
+        <SearchBar
+          value={search}
+          onChangeText={setSearch}
+          placeholder={view === 'customers' ? 'Search customer / shop' : 'Bill no or customer name'}
+        />
       </View>
 
-      {/* Outstanding summary */}
-      <View className="flex-row items-center justify-between border-b border-slate-200 bg-slate-900 px-4 py-3">
-        <Text className="text-xs text-slate-400">Total outstanding</Text>
-        <Text className="text-xl font-bold text-amber-400">
-          {formatMoney(outstanding)}
-        </Text>
-      </View>
-
-      {isEmpty ? (
-        <View className="flex-1 items-center justify-center px-6">
-          <Text className="text-5xl">💳</Text>
-          <Text className="mt-3 text-center text-base text-slate-500">
-            {error ? `Couldn't load credit bills.\n${error}` : 'No outstanding credit. All settled!'}
+      {pendingCredit.length > 0 && view !== 'history' && (
+        <View className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+          <Text className="text-xs font-semibold text-amber-800">
+            {pendingCredit.length} offline credit bill{pendingCredit.length === 1 ? '' : 's'} (
+            {formatMoney(pendingDue)}) not synced yet — included in the total, payments can be
+            taken once they upload.
           </Text>
         </View>
-      ) : (
+      )}
+
+      {active.data.length === 0 ? (
+        <ListPlaceholder
+          loading={active.loading}
+          error={active.error}
+          emoji={view === 'history' ? '📗' : '💳'}
+          message={
+            debouncedSearch
+              ? 'Nothing matches your search.'
+              : view === 'history'
+                ? 'No credit bills have been paid off yet.'
+                : 'No outstanding credit. All settled! 🎉'
+          }
+          onRetry={active.reload}
+        />
+      ) : view === 'customers' ? (
         <FlashList
-          data={bills}
-          keyExtractor={(item) => item.id}
+          data={customers.data}
+          keyExtractor={(c) => c.key}
           contentContainerStyle={{ padding: 12 }}
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.4}
+          keyboardShouldPersistTaps="handled"
           refreshControl={
             <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => fetchPage(1, true)}
+              refreshing={customers.refreshing}
+              onRefresh={() => {
+                setTotalsNonce((n) => n + 1);
+                customers.refresh();
+              }}
             />
           }
-          ListHeaderComponent={
-            pendingCredit.length > 0 ? (
-              <View className="mb-2">
-                {pendingCredit.map((b) => (
-                  <View
-                    key={b.localId}
-                    className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                    <View className="flex-row items-center justify-between">
-                      <Text className="text-base font-semibold text-slate-900">
-                        {b.customerName || b.localRef}
-                      </Text>
-                      <Text className="text-base font-bold text-red-600">
-                        {formatMoney(b.amountDue)}
-                      </Text>
-                    </View>
-                    <Text className="mt-1 text-xs text-amber-700">
-                      Not synced yet — settle once it uploads.
+          renderItem={({ item }) => {
+            const age = daysAgo(item.oldest);
+            return (
+              <Pressable
+                onPress={() => setCustomer(item)}
+                className="mb-2 rounded-xl border border-slate-200 bg-white px-4 py-3 active:opacity-70">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1 pr-3">
+                    <Text className="text-base font-bold text-slate-900" numberOfLines={1}>
+                      {item.name || NO_NAME}
+                    </Text>
+                    <Text className="mt-0.5 text-xs text-slate-500">
+                      {item.bills} unpaid bill{item.bills === 1 ? '' : 's'} · oldest{' '}
+                      {formatDate(item.oldest)}
+                    </Text>
+                    <Text
+                      className={`mt-0.5 text-xs font-semibold ${
+                        age > 30 ? 'text-red-600' : age > 7 ? 'text-amber-600' : 'text-slate-400'
+                      }`}>
+                      Owing for {ageLabel(item.oldest)}
                     </Text>
                   </View>
-                ))}
-              </View>
-            ) : null
-          }
-          ListFooterComponent={
-            loading && bills.length > 0 ? (
-              <ActivityIndicator className="py-4" color="#10b981" />
-            ) : null
-          }
-          renderItem={({ item }) => (
-            <View className="mb-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
-              <View className="flex-row items-center justify-between">
-                <View className="flex-1 pr-3">
-                  <Text className="text-base font-bold text-slate-900">
-                    {item.customerName || `Bill #${item.billNo}`}
-                  </Text>
-                  <Text className="mt-0.5 text-xs text-slate-500">
-                    Bill #{item.billNo} · {formatWhen(item.createdAt)} ·{' '}
-                    {item.itemCount} item{item.itemCount === 1 ? '' : 's'}
-                  </Text>
-                  <Text className="mt-1 text-xs text-slate-500">
-                    Total {formatMoney(item.total)} · paid{' '}
-                    {formatMoney(item.cashReceived)}
-                  </Text>
+                  <View className="items-end">
+                    <Text className="text-lg font-bold text-red-600">{formatMoney(item.due)}</Text>
+                    <Text className="text-[11px] font-semibold text-emerald-600">
+                      Receive payment ›
+                    </Text>
+                  </View>
                 </View>
-                <View className="items-end">
-                  <Text className="text-lg font-bold text-red-600">
-                    {formatMoney(item.amountDue)}
-                  </Text>
-                  <Text className="text-[10px] font-semibold uppercase text-slate-400">
-                    due
-                  </Text>
-                </View>
-              </View>
-              <Pressable
-                disabled={settlingId === item.id}
-                onPress={() => confirmSettle(item)}
-                className="mt-3 items-center rounded-lg bg-emerald-500 py-2.5 active:opacity-80">
-                {settlingId === item.id ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text className="text-sm font-bold text-white">
-                    Mark as paid
-                  </Text>
-                )}
               </Pressable>
-            </View>
-          )}
+            );
+          }}
+        />
+      ) : (
+        <FlashList
+          data={billsList.data}
+          keyExtractor={(b) => b.id}
+          contentContainerStyle={{ padding: 12 }}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={billsList.refreshing}
+              onRefresh={() => {
+                setTotalsNonce((n) => n + 1);
+                billsList.refresh();
+              }}
+            />
+          }
+          renderItem={({ item }) => {
+            const d = serverToDisplay(item);
+            return (
+              <Pressable
+                onPress={() => setBill(d)}
+                className="mb-2 rounded-xl border border-slate-200 bg-white px-4 py-3 active:opacity-70">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-1 pr-3">
+                    <View className="flex-row items-center gap-2">
+                      <Text className="text-base font-bold text-slate-900" numberOfLines={1}>
+                        {item.customerName || NO_NAME}
+                      </Text>
+                      <StatusBadge status={d.status} />
+                    </View>
+                    <Text className="mt-0.5 text-xs text-slate-500">
+                      {billLabel(d)} · {formatDate(item.createdAt)}
+                      {view === 'history' && item.settledAt
+                        ? ` · paid ${formatDate(item.settledAt)}`
+                        : ` · ${ageLabel(item.createdAt)}`}
+                    </Text>
+                    <Text className="mt-0.5 text-xs text-slate-500">
+                      Total {formatMoney(item.total)} · paid {formatMoney(item.cashReceived)}
+                    </Text>
+                  </View>
+                  {view === 'unpaid' ? (
+                    <View className="items-end">
+                      <Text className="text-lg font-bold text-red-600">
+                        {formatMoney(item.amountDue)}
+                      </Text>
+                      <Text className="text-[11px] font-semibold text-emerald-600">
+                        Receive payment ›
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text className="text-base font-bold text-emerald-600">
+                      {formatMoney(item.total)}
+                    </Text>
+                  )}
+                </View>
+              </Pressable>
+            );
+          }}
         />
       )}
+
+      <PaginationBar
+        pagination={active.pagination}
+        onPage={active.setPage}
+        loading={active.loading}
+        noun={view === 'customers' ? 'customers' : 'bills'}
+      />
+
+      {customer && (
+        <CustomerSheet
+          customer={customer}
+          onClose={() => setCustomer(null)}
+          onChanged={refreshAll}
+          onOpenBill={(b) => {
+            setCustomer(null);
+            setBill(b);
+          }}
+        />
+      )}
+      <BillDetailSheet bill={bill} onClose={() => setBill(null)} onChanged={refreshAll} />
     </View>
   );
 }
