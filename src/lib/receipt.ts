@@ -27,7 +27,7 @@ const T = {
   method: `ගෙවීම් ක්${ZWJ}රමය`,
   cash: 'Cash / මුදලින්',
   credit: 'Credit / ණයට',
-  thanks: 'ස්තූතියි! නැවත පැමිණෙන්න.',
+  thanks: 'ස්තූතියි!',
   thanksEn: 'Thank you for your business!',
   offline: 'Offline — not yet synced',
 };
